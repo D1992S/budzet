@@ -11,7 +11,7 @@ export default defineConfig(({ mode }) => {
       },
       server: {
         proxy: {
-          '/api-proxy': 'http://localhost:5000',//Target your Node.js backend
+          '/api/ai': 'http://localhost:5000', // Target Node.js AI backend
         },
       },
       plugins: react(),

@@ -1,289 +1,217 @@
-
-/**
- * @license
- * Copyright 2025 Google LLC
- * SPDX-License-Identifier: Apache-2.0
- */
 import 'dotenv/config';
 import express from 'express';
-import { GoogleAuth } from 'google-auth-library';
-import fetch from 'node-fetch';
 
 const app = express();
-app.use(express.json({limit: process?.env?.API_PAYLOAD_MAX_SIZE || "7mb"}));
+app.use(express.json({ limit: process?.env?.API_PAYLOAD_MAX_SIZE || '12mb' }));
 
 const PORT = process?.env?.API_BACKEND_PORT || 5000;
-const API_BACKEND_HOST = process?.env?.API_BACKEND_HOST || "127.0.0.1";
-const GOOGLE_CLOUD_LOCATION = process?.env?.GOOGLE_CLOUD_LOCATION;
-const GOOGLE_CLOUD_PROJECT = process?.env?.GOOGLE_CLOUD_PROJECT;
+const API_BACKEND_HOST = process?.env?.API_BACKEND_HOST || '127.0.0.1';
+const OPENAI_API_KEY = process?.env?.OPENAI_API_KEY;
+const OPENAI_MODEL = process?.env?.OPENAI_MODEL || 'gpt-4.1-mini';
 
-if (!GOOGLE_CLOUD_PROJECT || !GOOGLE_CLOUD_LOCATION) {
-  console.error("Error: Environment variables GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION must be set.");
-  process.exit(1);
-}
+const CATEGORIES = [
+  'Jedzenie',
+  'Mieszkanie',
+  'Transport',
+  'Rozrywka',
+  'Zdrowie',
+  'Edukacja',
+  'Zakupy',
+  'Inne',
+  'Wypłata',
+  'Prezent',
+  'Rachunki',
+  'Abonamenty',
+  'Spłata Długu',
+  'Inwestycje',
+];
 
-const API_CLIENT_MAP = [
- {
-    name: "VertexGenAi:generateContent",
-    patternForProxy: "https://aiplatform.googleapis.com/{{version}}/publishers/google/models/{{model}}:generateContent",
-    getApiEndpoint: (context, params) => {
-      return `https://aiplatform.clients6.google.com/${params['version']}/projects/${context.projectId}/locations/${context.region}/publishers/google/models/${params['model']}:generateContent`;
-    },
-    isStreaming: false,
-    transformFn: null,
-  },
- {
-    name: "VertexGenAi:predict",
-    patternForProxy: "https://aiplatform.googleapis.com/{{version}}/publishers/google/models/{{model}}:predict",
-    getApiEndpoint: (context, params) => {
-      return `https://aiplatform.clients6.google.com/${params['version']}/projects/${context.projectId}/locations/${context.region}/publishers/google/models/${params['model']}:predict`;
-    },
-    isStreaming: false,
-    transformFn: null,
-  },
- {
-    name: "VertexGenAi:streamGenerateContent",
-    patternForProxy: "https://aiplatform.googleapis.com/{{version}}/publishers/google/models/{{model}}:streamGenerateContent",
-    getApiEndpoint: (context, params) => {
-      return `https://aiplatform.clients6.google.com/${params['version']}/projects/${context.projectId}/locations/${context.region}/publishers/google/models/${params['model']}:streamGenerateContent`;
-    },
-    isStreaming: true,
-    transformFn: (response) => {
-        let normalizedResponse = response.trim();
-        while (normalizedResponse.startsWith(',') || normalizedResponse.startsWith('[')) {
-          normalizedResponse = normalizedResponse.substring(1).trim();
-        }
-        while (normalizedResponse.endsWith(',') || normalizedResponse.endsWith(']')) {
-          normalizedResponse = normalizedResponse.substring(0, normalizedResponse.length - 1).trim();
-        }
-
-        if (!normalizedResponse.length) {
-          return {result: null, inProgress: false};
-        }
-
-        if (!normalizedResponse.endsWith('}')) {
-          return {result: normalizedResponse, inProgress: true};
-        }
-
-        try {
-          const parsedResponse = JSON.parse(`${normalizedResponse}`);
-          const transformedResponse = `data: ${JSON.stringify(parsedResponse)}\n\n`;
-          return {result: transformedResponse, inProgress: false};
-        } catch (error) {
-          throw new Error(`Failed to parse response: ${error}.`);
-        }
-    },
-  },
- {
-    name: "ReasoningEngine:query",
-    patternForProxy: "https://{{endpoint_location}}-aiplatform.googleapis.com/{{version}}/projects/{{project_id}}/locations/{{location_id}}/reasoningEngines/{{engine_id}}:query",
-    getApiEndpoint: (context, params) => {
-      return `https://${params['endpoint_location']}-aiplatform.clients6.google.com/v1beta1/projects/${params['project_id']}/locations/${params['location_id']}/reasoningEngines/${params['engine_id']}:query`;
-    },
-    isStreaming: false,
-    transformFn: null,
-  },
- {
-    name: "ReasoningEngine:streamQuery",
-    patternForProxy: "https://{{endpoint_location}}-aiplatform.googleapis.com/{{version}}/projects/{{project_id}}/locations/{{location_id}}/reasoningEngines/{{engine_id}}:streamQuery",
-    getApiEndpoint: (context, params) => {
-      return `https://${params['endpoint_location']}-aiplatform.clients6.google.com/v1beta1/projects/${params['project_id']}/locations/${params['location_id']}/reasoningEngines/${params['engine_id']}:streamQuery`;
-    },
-    isStreaming: true,
-    transformFn: null,
-  },
-].map((client) => ({ ...client, patternInfo: parsePattern(client.patternForProxy) }));
-
-// Uses Google Application Default Credentials (ADC).
-// Users need to run "gcloud auth application-default login" in order to use the proxy.
-const auth = new GoogleAuth({
-  scopes: ['https://www.googleapis.com/auth/cloud-platform'],
+const getOpenAiHeaders = () => ({
+  Authorization: `Bearer ${OPENAI_API_KEY}`,
+  'Content-Type': 'application/json',
 });
 
-function escapeRegex(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+const parseOpenAiMessageContent = (completionData) =>
+  completionData?.choices?.[0]?.message?.content ?? null;
 
-function parsePattern(pattern) {
-  const paramRegex = /\{\{(.*?)\}\}/g;
-  const params = [];
-  const parts = [];
-  let lastIndex = 0;
-  let match;
-
-  while ((match = paramRegex.exec(pattern)) !== null) {
-    params.push(match[1]);
-    const literalPart = pattern.substring(lastIndex, match.index);
-    parts.push(escapeRegex(literalPart));
-    parts.push(`(?<${match[1]}>[^/]+)`);
-    lastIndex = paramRegex.lastIndex;
-  }
-  parts.push(escapeRegex(pattern.substring(lastIndex)));
-  const regexString = parts.join('');
-
-  return {regex: new RegExp(`^${regexString}$`), params};
-}
-
-function extractParams(patternInfo, url) {
-  const match = url.match(patternInfo.regex);
-  if (!match) return null;
-  const params = {};
-  patternInfo.params.forEach((paramName, index) => {
-    params[paramName] = match[index + 1];
-  });
-  return params;
-}
-
-async function getAccessToken(res) {
-  try {
-    const authClient = await auth.getClient();
-    const token = await authClient.getAccessToken();
-    return token.token;
-  } catch (error) {
-    console.error('[Node Proxy] Authentication error:', error);
-    if (error.code === 'ERR_GCLOUD_NOT_LOGGED_IN' || (error.message && error.message.includes('Could not load the default credentials'))) {
-      res.status(401).json({
-        error: 'Authentication Required',
-        message: 'Google Cloud Application Default Credentials not found or invalid. Please run "gcloud auth application-default login" and try again.',
-      });
-    } else {
-      res.status(500).json({ error: `Authentication failed: ${error.message}` });
-    }
+const extractJsonFromContent = (content) => {
+  if (!content || typeof content !== 'string') {
     return null;
   }
-}
 
-function getRequestHeaders(accessToken) {
-  return {
-    'Authorization': `Bearer ${accessToken}`,
-    'X-Goog-User-Project': GOOGLE_CLOUD_PROJECT,
-    'Content-Type': 'application/json',
-  };
-}
-
-// --- Proxy Endpoint ---
-app.post('/api-proxy', async (req, res) => {
-  // Check for the custom header added by the shim
-  if (req.headers['x-app-proxy'] !== 'local-vertex-ai-app') {
-    return res.status(403).send('Forbidden: Request must originate from the local Vertex App shim.');
+  const trimmed = content.trim();
+  if (!trimmed) {
+    return null;
   }
 
-  const { originalUrl, method, headers, body } = req.body;
-  if (!originalUrl) {
-    return res.status(400).send('Bad Request: originalUrl is required.');
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const codeFenceMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (codeFenceMatch?.[1]) {
+      return JSON.parse(codeFenceMatch[1]);
+    }
+    throw new Error('Model response is not valid JSON.');
   }
+};
 
-  // 1. Find the matching API client
-  const apiClient = API_CLIENT_MAP.find(p => {
-    // We store extractedParams on req for use later if needed, though getVertexUrl takes it as arg.
-    req.extractedParams = extractParams(p.patternInfo, originalUrl);
-    return req.extractedParams !== null;
+const buildAdviceMessages = ({ transactions, goals, userQuery }) => {
+  const totalIncome = transactions
+    .filter((t) => t.type === 'income')
+    .reduce((sum, t) => sum + t.amount, 0);
+  const totalExpense = transactions
+    .filter((t) => t.type === 'expense')
+    .reduce((sum, t) => sum + t.amount, 0);
+
+  return [
+    {
+      role: 'system',
+      content:
+        'Jesteś doświadczonym doradcą finansowym dla użytkowników w Polsce. Odpowiadaj po polsku, zwięźle i konkretnie, używając Markdown.',
+    },
+    {
+      role: 'user',
+      content: JSON.stringify(
+        {
+          summary: {
+            totalIncome,
+            totalExpense,
+            balance: totalIncome - totalExpense,
+          },
+          goals,
+          recentTransactions: transactions.slice(0, 20),
+          userQuery,
+        },
+        null,
+        2
+      ),
+    },
+  ];
+};
+
+const buildDocumentParsingMessages = ({ fileBase64, mimeType }) => [
+  {
+    role: 'system',
+    content:
+      'Wyodrębnij transakcje z dokumentu finansowego. Zwróć wyłącznie JSON zgodny ze schematem.',
+  },
+  {
+    role: 'user',
+    content: `Przeanalizuj dokument finansowy. Kategorie dozwolone: ${CATEGORIES.join(', ')}.\n\nMime type: ${mimeType}\nBase64: ${fileBase64}`,
+  },
+];
+
+const mapAdviceRequestToOpenAi = (requestBody) => ({
+  model: OPENAI_MODEL,
+  temperature: 0.4,
+  messages: buildAdviceMessages(requestBody),
+});
+
+const mapDocumentRequestToOpenAi = (requestBody) => ({
+  model: OPENAI_MODEL,
+  temperature: 0,
+  messages: buildDocumentParsingMessages(requestBody),
+  response_format: {
+    type: 'json_schema',
+    json_schema: {
+      name: 'financial_document_transactions',
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          transactions: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                date: { type: 'string' },
+                amount: { type: 'number' },
+                type: { type: 'string', enum: ['income', 'expense'] },
+                category: { type: 'string', enum: CATEGORIES },
+                description: { type: 'string' },
+              },
+              required: ['date', 'amount', 'type', 'category', 'description'],
+            },
+          },
+        },
+        required: ['transactions'],
+      },
+      strict: true,
+    },
+  },
+});
+
+const callOpenAiChatCompletions = async (payload) => {
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: getOpenAiHeaders(),
+    body: JSON.stringify(payload),
   });
 
-  if (!apiClient) {
-    console.error(`[Node Proxy] No API client handler found for URL: ${originalUrl}`);
-    return res.status(404).json({ error: `No proxy handler found for URL: ${originalUrl}` });
+  const data = await response.json();
+
+  if (!response.ok) {
+    const apiError = data?.error?.message || 'OpenAI API request failed.';
+    throw new Error(apiError);
   }
 
-  const extractedParams = req.extractedParams;
-  console.log(`[Node Proxy] Matched API client: ${apiClient.name}`);
+  return data;
+};
+
+app.post('/api/ai/advice', async (req, res) => {
+  if (!OPENAI_API_KEY) {
+    return res.status(500).json({ error: 'Brak konfiguracji OPENAI_API_KEY na backendzie.' });
+  }
+
+  const { transactions, goals, userQuery } = req.body ?? {};
+  if (!Array.isArray(transactions) || !Array.isArray(goals) || typeof userQuery !== 'string') {
+    return res.status(400).json({ error: 'Nieprawidłowy format danych wejściowych.' });
+  }
+
   try {
-    // 2. Get authenticated access token
-    const accessToken = await getAccessToken(res);
-    if (!accessToken) return;
+    const openAiPayload = mapAdviceRequestToOpenAi({ transactions, goals, userQuery });
+    const completion = await callOpenAiChatCompletions(openAiPayload);
+    const advice = parseOpenAiMessageContent(completion);
 
-    // 3. Construct the full API URL using env-set GOOGLE_CLOUD_PROJECT/LOCATION and extracted params
-    const context = {projectId: GOOGLE_CLOUD_PROJECT, region: GOOGLE_CLOUD_LOCATION};
-    const apiUrl = apiClient.getApiEndpoint(context, extractedParams);
-    console.log(`[Node Proxy] Forwarding to Vertex API: ${apiUrl}`);
-
-    // 4. Prepare headers for the API call
-    const apiHeaders = getRequestHeaders(accessToken);
-
-    const apiFetchOptions = {
-      method: method || 'POST',
-      headers: {...apiHeaders, ...headers},
-      body: body ? body : undefined,
-    };
-
-    // 5. Make the call to the API
-    const apiResponse = await fetch(apiUrl, apiFetchOptions);
-
-    // 6. Respond to the client based on stream type
-    if (apiClient.isStreaming) {
-      console.log(`[Node Proxy] Sending STREAMING response for ${apiClient.name}`);
-      // Set headers for a streaming JSON response
-      res.writeHead(apiResponse.status, {
-        'Content-Type': 'text/event-stream',
-        'Transfer-Encoding': 'chunked',
-        'Connection': 'keep-alive',
-      });
-      // Immediately send headers
-      res.flushHeaders();
-
-      if (!apiResponse.body) {
-        console.error('[Node Proxy] Streaming response has no body.');
-        return res.end(JSON.stringify({ error: 'Streaming response body is null' }));
-      }
-
-      const decoder = new TextDecoder();
-      let deltaChunk = '';
-      apiResponse.body.on('data', (encodedChunk) => {
-        if (res.writableEnded) return; // Prevent writing after res.end()
-
-        try {
-          if (!apiClient.transformFn) {
-            res.write(encodedChunk);
-          } else {
-            const decodedChunk = decoder.decode(encodedChunk, { stream: true });
-            deltaChunk = deltaChunk + decodedChunk;
-
-            const {result, inProgress} = apiClient.transformFn(deltaChunk);
-            if (result && !inProgress) {
-              deltaChunk = '';
-              res.write(new TextEncoder().encode(result));
-            }
-          }
-        } catch (error) {
-          console.error(`[Node Proxy] Error processing streaming response for ${apiClient.name}`);
-          console.error(error);
-        }
-      });
-
-      apiResponse.body.on('end', () => {
-        deltaChunk = '';
-        console.log(`[Node Proxy] Vertex stream finished and all data processed for ${apiClient.name}`);
-        res.end();
-      });
-
-      apiResponse.body.on('error', (streamError) => {
-        console.error('[Node Proxy] Error from Vertex stream:', streamError);
-        if (!res.writableEnded) {
-          res.end(JSON.stringify({ proxyError: 'Stream error from Vertex AI', details: streamError.message }));
-        }
-      });
-
-      res.on('error', (resError) => {
-        console.error('[Node Proxy] Error writing to client response:', resError);
-        // The source stream might need to be destroyed if an error occurs here.
-        if (apiResponse.body && typeof apiResponse.body.destroy === 'function') {
-             apiResponse.body.destroy(resError);
-        }
-      });
-    } else {
-      // Non-streaming response handling
-      console.log(`[Node Proxy] Sending JSON response for ${apiClient.name}`);
-      const data = await apiResponse.json();
-      res.status(apiResponse.status).json(data);
+    if (!advice) {
+      return res.status(502).json({ error: 'OpenAI nie zwróciło treści porady.' });
     }
+
+    return res.json({ advice });
   } catch (error) {
-    console.error(`[Node Proxy] Error proxying request for ${apiClient.name}`);
-    console.error(error)
-    res.status(500).json({ error: error });
+    console.error('[AI Advice] Error:', error);
+    return res.status(500).json({ error: error.message || 'Nie udało się pobrać porady AI.' });
+  }
+});
+
+app.post('/api/ai/parse-document', async (req, res) => {
+  if (!OPENAI_API_KEY) {
+    return res.status(500).json({ error: 'Brak konfiguracji OPENAI_API_KEY na backendzie.' });
+  }
+
+  const { fileBase64, mimeType } = req.body ?? {};
+  if (typeof fileBase64 !== 'string' || typeof mimeType !== 'string') {
+    return res.status(400).json({ error: 'Nieprawidłowy format danych wejściowych.' });
+  }
+
+  try {
+    const openAiPayload = mapDocumentRequestToOpenAi({ fileBase64, mimeType });
+    const completion = await callOpenAiChatCompletions(openAiPayload);
+    const content = parseOpenAiMessageContent(completion);
+    const parsed = extractJsonFromContent(content);
+
+    if (!parsed || !Array.isArray(parsed.transactions)) {
+      return res.status(502).json({ error: 'OpenAI zwróciło nieprawidłowy format odpowiedzi.' });
+    }
+
+    return res.json({ transactions: parsed.transactions });
+  } catch (error) {
+    console.error('[AI Parse Document] Error:', error);
+    return res.status(500).json({ error: error.message || 'Nie udało się przeanalizować dokumentu.' });
   }
 });
 
 app.listen(PORT, API_BACKEND_HOST, () => {
-  console.log(`Vertex AI Backend listening at http://localhost:${PORT}`);
+  console.log(`AI Backend listening at http://${API_BACKEND_HOST}:${PORT}`);
 });
-
