@@ -1,5 +1,15 @@
 import 'dotenv/config';
 import express from 'express';
+import {
+  OPENAI_MODEL,
+  AI_MODEL_TEMPERATURE,
+  AI_MODEL_MAX_TOKENS,
+  AI_MODEL_TIMEOUT_MS,
+  PROMPT_VERSION,
+  SYSTEM_PROMPTS,
+  getAiDiagnosticContext,
+  validateAiModelConfig,
+} from './aiConfig.js';
 
 const app = express();
 
@@ -8,7 +18,6 @@ const API_PAYLOAD_MAX_SIZE = process?.env?.API_PAYLOAD_MAX_SIZE || DEFAULT_PAYLO
 const PORT = process?.env?.API_BACKEND_PORT || 5000;
 const API_BACKEND_HOST = process?.env?.API_BACKEND_HOST || '127.0.0.1';
 const OPENAI_API_KEY = process?.env?.OPENAI_API_KEY;
-const OPENAI_MODEL = process?.env?.OPENAI_MODEL || 'gpt-4.1-mini';
 const AI_RATE_LIMIT_MAX = Number(process?.env?.API_RATE_LIMIT_MAX || 30);
 const AI_RATE_LIMIT_WINDOW_MS = Number(process?.env?.API_RATE_LIMIT_WINDOW_MS || 60_000);
 const AI_CORS_ALLOWLIST = (process?.env?.API_CORS_ALLOWLIST || 'http://localhost:5173,http://127.0.0.1:5173')
@@ -58,6 +67,8 @@ const validateConfiguration = () => {
   if (!Number.isFinite(AI_RATE_LIMIT_WINDOW_MS) || AI_RATE_LIMIT_WINDOW_MS <= 0) {
     issues.push('API_RATE_LIMIT_WINDOW_MS musi być dodatnią liczbą.');
   }
+
+  issues.push(...validateAiModelConfig());
 
   return issues;
 };
@@ -136,8 +147,7 @@ const buildAdviceMessages = ({ transactions, goals, userQuery }) => {
   return [
     {
       role: 'system',
-      content:
-        'Jesteś doświadczonym doradcą finansowym dla użytkowników w Polsce. Odpowiadaj po polsku, zwięźle i konkretnie, używając Markdown.',
+      content: SYSTEM_PROMPTS.FINANCIAL_ADVISOR_PL,
     },
     {
       role: 'user',
@@ -162,8 +172,7 @@ const buildAdviceMessages = ({ transactions, goals, userQuery }) => {
 const buildDocumentParsingMessages = ({ fileBase64, mimeType }) => [
   {
     role: 'system',
-    content:
-      'Wyodrębnij transakcje z dokumentu finansowego. Zwróć wyłącznie JSON zgodny ze schematem.',
+    content: SYSTEM_PROMPTS.FINANCIAL_DOCUMENT_PARSER,
   },
   {
     role: 'user',
@@ -173,13 +182,15 @@ const buildDocumentParsingMessages = ({ fileBase64, mimeType }) => [
 
 const mapAdviceRequestToOpenAi = (requestBody) => ({
   model: OPENAI_MODEL,
-  temperature: 0.4,
+  temperature: AI_MODEL_TEMPERATURE,
+  max_tokens: AI_MODEL_MAX_TOKENS,
   messages: buildAdviceMessages(requestBody),
 });
 
 const mapDocumentRequestToOpenAi = (requestBody) => ({
   model: OPENAI_MODEL,
-  temperature: 0,
+  temperature: AI_MODEL_TEMPERATURE,
+  max_tokens: AI_MODEL_MAX_TOKENS,
   messages: buildDocumentParsingMessages(requestBody),
   response_format: {
     type: 'json_schema',
@@ -213,20 +224,28 @@ const mapDocumentRequestToOpenAi = (requestBody) => ({
 });
 
 const callOpenAiChatCompletions = async (payload) => {
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: getOpenAiHeaders(),
-    body: JSON.stringify(payload),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), AI_MODEL_TIMEOUT_MS);
 
-  const data = await response.json();
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: getOpenAiHeaders(),
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
 
-  if (!response.ok) {
-    const apiError = data?.error?.message || 'OpenAI API request failed.';
-    throw new Error(apiError);
+    const data = await response.json();
+
+    if (!response.ok) {
+      const apiError = data?.error?.message || 'OpenAI API request failed.';
+      throw new Error(apiError);
+    }
+
+    return data;
+  } finally {
+    clearTimeout(timeout);
   }
-
-  return data;
 };
 
 const validateConfigurationOrFail = (_req, res, next) => {
@@ -401,6 +420,8 @@ aiRouter.options('/parse-document', (_req, res) => res.sendStatus(204));
 
 aiRouter.post('/advice', validateAdvicePayload, async (req, res) => {
   const { transactions, goals, userQuery } = req.body;
+  const fallbackAdvice =
+    'Chwilowo nie mogę przygotować spersonalizowanej porady. Sprawdź swoje 3 największe wydatki z ostatnich 30 dni i zacznij od ograniczenia jednego z nich o 10%.';
 
   try {
     const openAiPayload = mapAdviceRequestToOpenAi({ transactions, goals, userQuery });
@@ -413,8 +434,17 @@ aiRouter.post('/advice', validateAdvicePayload, async (req, res) => {
 
     return res.json({ advice });
   } catch (error) {
-    console.error('[AI Advice] Error:', error);
-    return res.status(500).json({ error: error.message || 'Nie udało się pobrać porady AI.' });
+    console.error('[AI Advice] Error:', {
+      ...getAiDiagnosticContext('advice'),
+      message: error?.message,
+      name: error?.name,
+    });
+
+    return res.status(200).json({
+      advice: fallbackAdvice,
+      warning:
+        'Wystąpił chwilowy problem z usługą AI. Pokazujemy bezpieczną podpowiedź zastępczą.',
+    });
   }
 });
 
@@ -433,8 +463,17 @@ aiRouter.post('/parse-document', validateParseDocumentPayload, async (req, res) 
 
     return res.json({ transactions: parsed.transactions });
   } catch (error) {
-    console.error('[AI Parse Document] Error:', error);
-    return res.status(500).json({ error: error.message || 'Nie udało się przeanalizować dokumentu.' });
+    console.error('[AI Parse Document] Error:', {
+      ...getAiDiagnosticContext('parse-document'),
+      promptVersion: PROMPT_VERSION,
+      message: error?.message,
+      name: error?.name,
+    });
+
+    return res.status(503).json({
+      error:
+        'Nie udało się teraz odczytać dokumentu. Spróbuj ponownie za chwilę albo dodaj transakcje ręcznie.',
+    });
   }
 });
 

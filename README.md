@@ -51,3 +51,32 @@ To install dependencies and run your Google Cloud Vertex AI Studio App locally, 
 
 ```bash
 npm install && npm run dev
+
+## Konfiguracja AI backendu
+
+W backendzie parametry modelu są konfigurowane przez zmienne środowiskowe:
+
+* `OPENAI_MODEL` – nazwa modelu.
+* `AI_MODEL_TEMPERATURE` – poziom kreatywności/losowości odpowiedzi (0-2).
+* `AI_MODEL_MAX_TOKENS` – górny limit długości odpowiedzi.
+* `AI_MODEL_TIMEOUT_MS` – timeout zapytania do modelu (ms).
+* `PROMPT_VERSION` – wersja promptów widoczna w logach diagnostycznych.
+
+### Wpływ parametrów modelu na koszt i jakość
+
+* **Model (`OPENAI_MODEL`)**
+  * Bardziej zaawansowane modele zwykle dają lepszą jakość rozumowania i ekstrakcji danych.
+  * Zwykle są też droższe per token i mogą mieć większe opóźnienie.
+
+* **Temperature (`AI_MODEL_TEMPERATURE`)**
+  * Niższe wartości (np. `0.0`–`0.3`) dają bardziej deterministyczne i powtarzalne odpowiedzi.
+  * Wyższe wartości (np. `0.7`+) zwiększają różnorodność odpowiedzi, ale mogą obniżyć spójność.
+  * Temperature sama w sobie nie zwiększa kosztu tokenowego, ale może wpływać na użyteczność odpowiedzi.
+
+* **Max tokens (`AI_MODEL_MAX_TOKENS`)**
+  * Bezpośrednio ogranicza maksymalną długość odpowiedzi modelu.
+  * Wyższy limit może poprawić kompletność odpowiedzi, ale zwykle zwiększa koszt (więcej tokenów w odpowiedzi).
+
+* **Timeout (`AI_MODEL_TIMEOUT_MS`)**
+  * Nie wpływa bezpośrednio na cenę tokenów, ale wpływa na UX i niezawodność.
+  * Zbyt niski timeout zwiększa liczbę fallbacków, zbyt wysoki wydłuża oczekiwanie użytkownika przy problemach.
