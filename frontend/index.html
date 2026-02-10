@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="pl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Grosz do Grosza - Budżet Domowy</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'media', // Automatic dark mode based on system preference
+        theme: {
+          extend: {
+            colors: {
+              primary: '#10b981', // Emerald 500
+              secondary: '#3b82f6', // Blue 500
+              danger: '#ef4444', // Red 500
+              dark: '#1e293b', // Slate 800
+            }
+          }
+        }
+      }
+    </script>
+      </head>
+  <body class="bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 antialiased transition-colors duration-300">
+    <div id="root"></div>
+    <script type="module" src="./index.tsx"></script>
+  </body>
+</html>
