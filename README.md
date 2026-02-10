@@ -1,82 +1,107 @@
-# Vertex AI Studio Frontend App with Node.js Backend
+# Grosz do Grosza — frontend + backend AI (OpenAI)
 
-This repository contains a frontend and a Node.js backend, designed to run together.
-The backend acts as a proxy, handling Google Cloud API calls.
+Repozytorium zawiera aplikację frontendową (React + Vite) oraz backend Node.js/Express.
+Backend udostępnia endpointy AI i komunikuje się z API OpenAI.
 
-This project is intended for demonstration and prototyping purposes only.
-It is not intended for use in a production environment.
+> Projekt jest przeznaczony do celów demonstracyjnych/prototypowych.
 
-## Prerequisites
+## Wymagania
 
-To run this application locally, you need:
+* Node.js 18+ oraz npm.
+* Klucz API OpenAI (`OPENAI_API_KEY`).
 
-*   **[Google Cloud SDK / gcloud CLI](https://cloud.google.com/sdk/docs/install)**: Follow the instructions to install the SDK.
+Nie potrzebujesz już:
+* `gcloud` CLI,
+* konfiguracji Vertex AI,
+* ADC (`gcloud auth application-default login`).
 
-*   **gcloud Initialization**:
-    *   Initialize the gcloud CLI:
-        ```bash
-        gcloud init
-        ```
-    *   Authenticate for Application Default Credentials (needed to call Google Cloud APIs):
-        ```bash
-        gcloud auth application-default login
-        ```
+## Struktura projektu
 
-*   **Node.js and npm**: Ensure you have Node.js and its package manager, `npm`, installed on your machine.
+* `frontend/` — aplikacja React (Vite).
+* `backend/` — serwer Node.js/Express z endpointami AI.
 
-## Project Structure
+## Konfiguracja środowiska (OpenAI)
 
-The project is organized into two main directories:
+Utwórz plik `backend/.env.local` (jeśli jeszcze nie istnieje) i ustaw:
 
-*   `frontend/`: Contains the Frontend application code.
-*   `backend/`: Contains the Node.js/Express server code to proxy Google Cloud API calls.
+```env
+API_BACKEND_PORT=5000
+API_BACKEND_HOST=127.0.0.1
+API_PAYLOAD_MAX_SIZE=12mb
+API_CORS_ALLOWLIST=http://localhost:5173,http://127.0.0.1:5173
+API_RATE_LIMIT_MAX=30
+API_RATE_LIMIT_WINDOW_MS=60000
 
-## Backend Environment Variables
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-4.1-mini
+AI_MODEL_TEMPERATURE=0.4
+AI_MODEL_MAX_TOKENS=700
+AI_MODEL_TIMEOUT_MS=12000
+PROMPT_VERSION=2026-02-10.v1
+```
 
-The `backend/.env.local` file is automatically generated when you download this application.
-It contains essential Google Cloud environment variables pre-configured based on your project settings at the time of download.
+### Znaczenie kluczowych zmiennych AI
 
-The variables set in `backend/.env.local` are:
-*   `API_BACKEND_PORT`: The port the backend API server listens on (e.g., `5000`).
-*   `API_PAYLOAD_MAX_SIZE`: The maximum size of the request payload accepted by the backend server (e.g., `5mb`).
-*   `GOOGLE_CLOUD_LOCATION`: The Google Cloud region associated with your project.
-*   `GOOGLE_CLOUD_PROJECT`: Your Google Cloud Project ID.
+* `OPENAI_MODEL` — model używany przez backend.
+* `AI_MODEL_TEMPERATURE` — losowość odpowiedzi (`0-2`).
+* `AI_MODEL_MAX_TOKENS` — limit długości odpowiedzi.
+* `AI_MODEL_TIMEOUT_MS` — timeout żądania do OpenAI.
+* `PROMPT_VERSION` — wersja promptów widoczna w logach diagnostycznych.
 
-**Note:** These variables are automatically populated during the download process.
-You can modify the values in `backend/.env.local` if you need to change them.
+## Instalacja i uruchamianie
 
-## Installation and Running the App
-
-To install dependencies and run your Google Cloud Vertex AI Studio App locally, execute the following command:
+Z katalogu głównego:
 
 ```bash
-npm install && npm run dev
+npm install
+npm run dev
+```
 
-## Konfiguracja AI backendu
+To uruchamia równolegle:
+* frontend: `http://localhost:5173`
+* backend: `http://127.0.0.1:5000`
 
-W backendzie parametry modelu są konfigurowane przez zmienne środowiskowe:
+### Uruchamianie osobno
 
-* `OPENAI_MODEL` – nazwa modelu.
-* `AI_MODEL_TEMPERATURE` – poziom kreatywności/losowości odpowiedzi (0-2).
-* `AI_MODEL_MAX_TOKENS` – górny limit długości odpowiedzi.
-* `AI_MODEL_TIMEOUT_MS` – timeout zapytania do modelu (ms).
-* `PROMPT_VERSION` – wersja promptów widoczna w logach diagnostycznych.
+Backend:
 
-### Wpływ parametrów modelu na koszt i jakość
+```bash
+npm run dev-backend
+```
 
-* **Model (`OPENAI_MODEL`)**
-  * Bardziej zaawansowane modele zwykle dają lepszą jakość rozumowania i ekstrakcji danych.
-  * Zwykle są też droższe per token i mogą mieć większe opóźnienie.
+Frontend:
 
-* **Temperature (`AI_MODEL_TEMPERATURE`)**
-  * Niższe wartości (np. `0.0`–`0.3`) dają bardziej deterministyczne i powtarzalne odpowiedzi.
-  * Wyższe wartości (np. `0.7`+) zwiększają różnorodność odpowiedzi, ale mogą obniżyć spójność.
-  * Temperature sama w sobie nie zwiększa kosztu tokenowego, ale może wpływać na użyteczność odpowiedzi.
+```bash
+npm run dev-frontend
+```
 
-* **Max tokens (`AI_MODEL_MAX_TOKENS`)**
-  * Bezpośrednio ogranicza maksymalną długość odpowiedzi modelu.
-  * Wyższy limit może poprawić kompletność odpowiedzi, ale zwykle zwiększa koszt (więcej tokenów w odpowiedzi).
+## Endpointy backendu AI
 
-* **Timeout (`AI_MODEL_TIMEOUT_MS`)**
-  * Nie wpływa bezpośrednio na cenę tokenów, ale wpływa na UX i niezawodność.
-  * Zbyt niski timeout zwiększa liczbę fallbacków, zbyt wysoki wydłuża oczekiwanie użytkownika przy problemach.
+Backend wystawia endpointy pod prefiksem `/api/ai`:
+
+* `POST /api/ai/advice` — porady finansowe na podstawie transakcji i celów.
+* `POST /api/ai/parse-document` — ekstrakcja transakcji z dokumentu (`pdf`, `jpg`, `png`, `webp`, `txt`).
+
+### Jak frontend trafia do backendu
+
+W trybie deweloperskim Vite proxuje żądania `/api/ai/*` na backend (`http://localhost:5000`).
+Dzięki temu frontend wywołuje po prostu lokalne ścieżki:
+
+* `/api/ai/advice`
+* `/api/ai/parse-document`
+
+## Migracja danych/konfiguracji
+
+Jeśli wcześniej używałeś konfiguracji Google Cloud / Vertex:
+
+1. Usuń stare zmienne (jeśli występują) z `backend/.env.local`, np.:
+   * `GOOGLE_CLOUD_PROJECT`
+   * `GOOGLE_CLOUD_LOCATION`
+   * inne zmienne specyficzne dla Vertex/ADC
+2. Dodaj `OPENAI_API_KEY` i (opcjonalnie) dopasuj `OPENAI_MODEL`.
+3. Zrestartuj backend po zmianach env (`Ctrl+C` i ponownie `npm run dev-backend` / `npm run dev`).
+
+### Dane użytkownika
+
+Dane aplikacji (transakcje, cele itp.) są trzymane lokalnie w IndexedDB po stronie przeglądarki,
+więc migracja dostawcy AI nie usuwa danych użytkownika.

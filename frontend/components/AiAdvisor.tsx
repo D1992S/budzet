@@ -77,7 +77,7 @@ export const AiAdvisor: React.FC<AiAdvisorProps> = ({ transactions, goals }) => 
         </div>
         <div>
           <h3 className="font-semibold text-slate-800 dark:text-white">Inteligentny Doradca</h3>
-          <p className="text-xs text-slate-500 dark:text-slate-400">Powered by Gemini AI</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400">Powered by OpenAI</p>
         </div>
       </div>
 

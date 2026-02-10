@@ -15,7 +15,6 @@
     "recharts": "latest",
     "clsx": "latest",
     "tailwind-merge": "latest",
-    "@google/genai": "latest",
     "dexie": "latest"
   },
   "devDependencies": {
