@@ -10,11 +10,6 @@ Backend udostępnia endpointy AI i komunikuje się z API OpenAI.
 * Node.js 18+ oraz npm.
 * Klucz API OpenAI (`OPENAI_API_KEY`).
 
-Nie potrzebujesz już:
-* `gcloud` CLI,
-* konfiguracji Vertex AI,
-* ADC (`gcloud auth application-default login`).
-
 ## Struktura projektu
 
 * `frontend/` — aplikacja React (Vite).
@@ -40,40 +35,55 @@ AI_MODEL_TIMEOUT_MS=12000
 PROMPT_VERSION=2026-02-10.v1
 ```
 
-### Znaczenie kluczowych zmiennych AI
+## Instalacja (Windows/macOS/Linux)
 
-* `OPENAI_MODEL` — model używany przez backend.
-* `AI_MODEL_TEMPERATURE` — losowość odpowiedzi (`0-2`).
-* `AI_MODEL_MAX_TOKENS` — limit długości odpowiedzi.
-* `AI_MODEL_TIMEOUT_MS` — timeout żądania do OpenAI.
-* `PROMPT_VERSION` — wersja promptów widoczna w logach diagnostycznych.
-
-## Instalacja i uruchamianie
-
-Z katalogu głównego:
+Kroki są takie same na wszystkich systemach (PowerShell, Terminal, Bash):
 
 ```bash
 npm install
+```
+
+### Start deweloperski (frontend + backend)
+
+```bash
 npm run dev
 ```
 
-To uruchamia równolegle:
+Uruchamia równolegle:
 * frontend: `http://localhost:5173`
 * backend: `http://127.0.0.1:5000`
 
-### Uruchamianie osobno
-
-Backend:
+### Start backendu tylko DEV (z nodemon)
 
 ```bash
 npm run dev-backend
 ```
 
-Frontend:
+### Start backendu tylko PROD (bez nodemon)
 
 ```bash
-npm run dev-frontend
+npm run start-backend
 ```
+
+### Build frontendu
+
+```bash
+npm run build-frontend
+```
+
+## Check-start backendu (walidacja env)
+
+Backend ma skrypt startowy, który przed uruchomieniem waliduje konfigurację.
+Najważniejsza kontrola to obecność `OPENAI_API_KEY`.
+
+Ręczne wywołanie walidacji:
+
+```bash
+npm run check-start --prefix backend
+```
+
+Jeśli `OPENAI_API_KEY` nie jest ustawiony, backend kończy działanie z czytelną listą błędów i wskazówką,
+co dopisać do `backend/.env.local`.
 
 ## Endpointy backendu AI
 
@@ -82,26 +92,66 @@ Backend wystawia endpointy pod prefiksem `/api/ai`:
 * `POST /api/ai/advice` — porady finansowe na podstawie transakcji i celów.
 * `POST /api/ai/parse-document` — ekstrakcja transakcji z dokumentu (`pdf`, `jpg`, `png`, `webp`, `txt`).
 
-### Jak frontend trafia do backendu
+## Endpoint zdrowia `/health`
+
+Backend udostępnia endpoint:
+
+* `GET /health`
+
+Przykładowa odpowiedź:
+
+```json
+{
+  "status": "ok",
+  "serverReady": true,
+  "aiConfigured": true,
+  "checks": {
+    "openAiKeyConfigured": true,
+    "aiConfigValid": true,
+    "payloadLimitValid": true
+  },
+  "issues": []
+}
+```
+
+W przypadku problemu z konfiguracją zwracany jest status `503` i lista `issues`.
+Endpoint nie ujawnia sekretów (pokazuje wyłącznie informacje typu `true/false`).
+
+## Backup / restore danych IndexedDB (JSON)
+
+Aplikacja ma widok **Backup danych** w menu bocznym.
+
+### Eksport (backup)
+1. Wejdź w zakładkę **Backup danych**.
+2. Kliknij **Eksportuj JSON**.
+3. Zapisz plik `.json` w bezpiecznym miejscu.
+
+### Import (restore)
+1. Wejdź w zakładkę **Backup danych**.
+2. Kliknij **Importuj JSON** i wskaż plik backupu.
+3. Dane zostaną odtworzone do IndexedDB.
+
+Dzięki temu reinstalacja, zmiana urządzenia lub czyszczenie pamięci przeglądarki nie muszą oznaczać utraty danych.
+
+## Release checklist
+
+Przed wydaniem wykonaj:
+
+1. **Build frontendu**
+   * `npm run build-frontend`
+2. **Uruchomienie backendu**
+   * `npm run start-backend`
+3. **Test ścieżki czatu AI**
+   * Otwórz aplikację, przejdź do `Asystent AI`, wyślij zapytanie i potwierdź odpowiedź.
+4. **Test parsowania dokumentu**
+   * Wgraj przykładowy dokument (`pdf`/`jpg`/`png`/`webp`/`txt`) i sprawdź, czy transakcje są poprawnie odczytywane.
+5. **Kontrola zdrowia backendu**
+   * `curl http://127.0.0.1:5000/health`
+
+## Jak frontend trafia do backendu
 
 W trybie deweloperskim Vite proxuje żądania `/api/ai/*` na backend (`http://localhost:5000`).
-Dzięki temu frontend wywołuje po prostu lokalne ścieżki:
+Dzięki temu frontend wywołuje lokalne ścieżki:
 
 * `/api/ai/advice`
 * `/api/ai/parse-document`
-
-## Migracja danych/konfiguracji
-
-Jeśli wcześniej używałeś konfiguracji Google Cloud / Vertex:
-
-1. Usuń stare zmienne (jeśli występują) z `backend/.env.local`, np.:
-   * `GOOGLE_CLOUD_PROJECT`
-   * `GOOGLE_CLOUD_LOCATION`
-   * inne zmienne specyficzne dla Vertex/ADC
-2. Dodaj `OPENAI_API_KEY` i (opcjonalnie) dopasuj `OPENAI_MODEL`.
-3. Zrestartuj backend po zmianach env (`Ctrl+C` i ponownie `npm run dev-backend` / `npm run dev`).
-
-### Dane użytkownika
-
-Dane aplikacji (transakcje, cele itp.) są trzymane lokalnie w IndexedDB po stronie przeglądarki,
-więc migracja dostawcy AI nie usuwa danych użytkownika.

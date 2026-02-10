@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { LayoutDashboard, Receipt, PiggyBank, Bot, Menu, X, Database, CalendarClock, CreditCard, TrendingUp } from 'lucide-react';
+import { LayoutDashboard, Receipt, PiggyBank, Bot, Menu, X, Database, CalendarClock, CreditCard, TrendingUp, HardDriveUpload } from 'lucide-react';
 import { Transaction, SavingsGoal, BudgetSummary, RecurringExpense, Debt, Investment } from './types';
 import { Dashboard } from './components/Dashboard';
 import { TransactionManager } from './components/TransactionManager';
@@ -8,6 +8,7 @@ import { RecurringManager } from './components/RecurringManager';
 import { DebtManager } from './components/DebtManager';
 import { InvestmentManager } from './components/InvestmentManager';
 import { AiAdvisor } from './components/AiAdvisor';
+import { DataBackupManager } from './components/DataBackupManager';
 import { db } from './db';
 
 // Initial Dummy Data (used only on first run)
@@ -22,7 +23,7 @@ const INITIAL_GOALS: SavingsGoal[] = [
   { id: '2', name: 'Nowy Laptop', targetAmount: 4000, currentAmount: 800, color: '#3b82f6' },
 ];
 
-type View = 'dashboard' | 'transactions' | 'recurring' | 'debts' | 'investments' | 'savings' | 'ai';
+type View = 'dashboard' | 'transactions' | 'recurring' | 'debts' | 'investments' | 'savings' | 'ai' | 'backup';
 
 const App: React.FC = () => {
   // State
@@ -50,17 +51,7 @@ const App: React.FC = () => {
           setGoals(INITIAL_GOALS);
         } else {
           // Load existing data
-          const txs = await db.transactions.orderBy('date').reverse().toArray();
-          const gls = await db.goals.toArray();
-          const recs = await db.recurringExpenses.toArray();
-          const dbs = await db.debts.toArray();
-          const invs = await db.investments.toArray();
-          
-          setTransactions(txs);
-          setGoals(gls);
-          setRecurringExpenses(recs);
-          setDebts(dbs);
-          setInvestments(invs);
+          await reloadDataFromDb();
         }
       } catch (error) {
         console.error("Failed to load data from DB:", error);
@@ -71,6 +62,20 @@ const App: React.FC = () => {
 
     loadData();
   }, []);
+
+  const reloadDataFromDb = async () => {
+    const txs = await db.transactions.orderBy('date').reverse().toArray();
+    const gls = await db.goals.toArray();
+    const recs = await db.recurringExpenses.toArray();
+    const dbs = await db.debts.toArray();
+    const invs = await db.investments.toArray();
+
+    setTransactions(txs);
+    setGoals(gls);
+    setRecurringExpenses(recs);
+    setDebts(dbs);
+    setInvestments(invs);
+  };
 
   // --- Transaction Handlers ---
   const addTransaction = async (t: Omit<Transaction, 'id'>) => {
@@ -192,6 +197,7 @@ const App: React.FC = () => {
     { id: 'investments', label: 'Inwestycje', icon: TrendingUp },
     { id: 'savings', label: 'Oszczędności', icon: PiggyBank },
     { id: 'ai', label: 'Asystent AI', icon: Bot },
+    { id: 'backup', label: 'Backup danych', icon: HardDriveUpload },
   ];
 
   if (isLoading) {
@@ -318,6 +324,10 @@ const App: React.FC = () => {
 
           {currentView === 'ai' && (
             <AiAdvisor transactions={transactions} goals={goals} />
+          )}
+
+          {currentView === 'backup' && (
+            <DataBackupManager onImported={reloadDataFromDb} />
           )}
         </div>
       </main>
