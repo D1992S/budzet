@@ -1,9 +1,14 @@
 {
   "name": "grosz-do-grosza",
-  "workspaces": ["frontend", "backend"], 
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
   "scripts": {
     "dev-frontend": "npm run dev --prefix frontend",
-    "dev-backend": "npm run dev --prefix backend",
+    "dev-backend": "npm run start:dev --prefix backend",
+    "start-backend": "npm run start:prod --prefix backend",
+    "build-frontend": "npm run build --prefix frontend",
     "dev": "concurrently \"npm run dev-frontend\" \"npm run dev-backend\""
   },
   "devDependencies": {

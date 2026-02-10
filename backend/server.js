@@ -8,16 +8,18 @@ import {
   PROMPT_VERSION,
   SYSTEM_PROMPTS,
   getAiDiagnosticContext,
-  validateAiModelConfig,
 } from './aiConfig.js';
+import {
+  collectConfigurationIssues,
+  formatConfigurationErrorMessage,
+} from './configValidation.js';
 
 const app = express();
 
-const DEFAULT_PAYLOAD_LIMIT = '12mb';
-const API_PAYLOAD_MAX_SIZE = process?.env?.API_PAYLOAD_MAX_SIZE || DEFAULT_PAYLOAD_LIMIT;
+const { issues: configurationIssues, payloadLimit: API_PAYLOAD_MAX_SIZE, payloadLimitBytes: MAX_PAYLOAD_BYTES } =
+  collectConfigurationIssues();
 const PORT = process?.env?.API_BACKEND_PORT || 5000;
 const API_BACKEND_HOST = process?.env?.API_BACKEND_HOST || '127.0.0.1';
-const OPENAI_API_KEY = process?.env?.OPENAI_API_KEY;
 const AI_RATE_LIMIT_MAX = Number(process?.env?.API_RATE_LIMIT_MAX || 30);
 const AI_RATE_LIMIT_WINDOW_MS = Number(process?.env?.API_RATE_LIMIT_WINDOW_MS || 60_000);
 const AI_CORS_ALLOWLIST = (process?.env?.API_CORS_ALLOWLIST || 'http://localhost:5173,http://127.0.0.1:5173')
@@ -25,60 +27,25 @@ const AI_CORS_ALLOWLIST = (process?.env?.API_CORS_ALLOWLIST || 'http://localhost
   .map((origin) => origin.trim())
   .filter(Boolean);
 
-const parseLimitToBytes = (limitValue) => {
-  if (typeof limitValue !== 'string') {
-    return null;
-  }
-
-  const normalized = limitValue.trim().toLowerCase();
-  const match = normalized.match(/^(\d+)(b|kb|mb)?$/);
-  if (!match) {
-    return null;
-  }
-
-  const value = Number(match[1]);
-  const unit = match[2] || 'b';
-  const multipliers = {
-    b: 1,
-    kb: 1024,
-    mb: 1024 * 1024,
-  };
-
-  return value * multipliers[unit];
-};
-
-const MAX_PAYLOAD_BYTES = parseLimitToBytes(API_PAYLOAD_MAX_SIZE);
-
-const validateConfiguration = () => {
-  const issues = [];
-
-  if (!OPENAI_API_KEY) {
-    issues.push('OPENAI_API_KEY nie został ustawiony.');
-  }
-
-  if (!MAX_PAYLOAD_BYTES) {
-    issues.push(`API_PAYLOAD_MAX_SIZE ma nieprawidłowy format (${API_PAYLOAD_MAX_SIZE}). Użyj np. 2mb lub 512kb.`);
-  }
-
-  if (!Number.isFinite(AI_RATE_LIMIT_MAX) || AI_RATE_LIMIT_MAX <= 0) {
-    issues.push('API_RATE_LIMIT_MAX musi być dodatnią liczbą.');
-  }
-
-  if (!Number.isFinite(AI_RATE_LIMIT_WINDOW_MS) || AI_RATE_LIMIT_WINDOW_MS <= 0) {
-    issues.push('API_RATE_LIMIT_WINDOW_MS musi być dodatnią liczbą.');
-  }
-
-  issues.push(...validateAiModelConfig());
-
-  return issues;
-};
-
-const configurationIssues = validateConfiguration();
-
-const getConfigurationErrorMessage = () =>
-  `Błąd konfiguracji backendu AI: ${configurationIssues.join(' ')}`;
+const getConfigurationErrorMessage = () => formatConfigurationErrorMessage(configurationIssues);
 
 app.use(express.json({ limit: API_PAYLOAD_MAX_SIZE }));
+
+app.get('/health', (_req, res) => {
+  const isReady = configurationIssues.length === 0;
+
+  return res.status(isReady ? 200 : 503).json({
+    status: isReady ? 'ok' : 'degraded',
+    serverReady: true,
+    aiConfigured: isReady,
+    checks: {
+      openAiKeyConfigured: Boolean(process?.env?.OPENAI_API_KEY),
+      aiConfigValid: !configurationIssues.some((issue) => issue.startsWith('AI_MODEL_')),
+      payloadLimitValid: Boolean(MAX_PAYLOAD_BYTES),
+    },
+    issues: isReady ? [] : configurationIssues,
+  });
+});
 
 const CATEGORIES = [
   'Jedzenie',
