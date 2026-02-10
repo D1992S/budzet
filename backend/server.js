@@ -2,12 +2,72 @@ import 'dotenv/config';
 import express from 'express';
 
 const app = express();
-app.use(express.json({ limit: process?.env?.API_PAYLOAD_MAX_SIZE || '12mb' }));
 
+const DEFAULT_PAYLOAD_LIMIT = '12mb';
+const API_PAYLOAD_MAX_SIZE = process?.env?.API_PAYLOAD_MAX_SIZE || DEFAULT_PAYLOAD_LIMIT;
 const PORT = process?.env?.API_BACKEND_PORT || 5000;
 const API_BACKEND_HOST = process?.env?.API_BACKEND_HOST || '127.0.0.1';
 const OPENAI_API_KEY = process?.env?.OPENAI_API_KEY;
 const OPENAI_MODEL = process?.env?.OPENAI_MODEL || 'gpt-4.1-mini';
+const AI_RATE_LIMIT_MAX = Number(process?.env?.API_RATE_LIMIT_MAX || 30);
+const AI_RATE_LIMIT_WINDOW_MS = Number(process?.env?.API_RATE_LIMIT_WINDOW_MS || 60_000);
+const AI_CORS_ALLOWLIST = (process?.env?.API_CORS_ALLOWLIST || 'http://localhost:5173,http://127.0.0.1:5173')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+const parseLimitToBytes = (limitValue) => {
+  if (typeof limitValue !== 'string') {
+    return null;
+  }
+
+  const normalized = limitValue.trim().toLowerCase();
+  const match = normalized.match(/^(\d+)(b|kb|mb)?$/);
+  if (!match) {
+    return null;
+  }
+
+  const value = Number(match[1]);
+  const unit = match[2] || 'b';
+  const multipliers = {
+    b: 1,
+    kb: 1024,
+    mb: 1024 * 1024,
+  };
+
+  return value * multipliers[unit];
+};
+
+const MAX_PAYLOAD_BYTES = parseLimitToBytes(API_PAYLOAD_MAX_SIZE);
+
+const validateConfiguration = () => {
+  const issues = [];
+
+  if (!OPENAI_API_KEY) {
+    issues.push('OPENAI_API_KEY nie został ustawiony.');
+  }
+
+  if (!MAX_PAYLOAD_BYTES) {
+    issues.push(`API_PAYLOAD_MAX_SIZE ma nieprawidłowy format (${API_PAYLOAD_MAX_SIZE}). Użyj np. 2mb lub 512kb.`);
+  }
+
+  if (!Number.isFinite(AI_RATE_LIMIT_MAX) || AI_RATE_LIMIT_MAX <= 0) {
+    issues.push('API_RATE_LIMIT_MAX musi być dodatnią liczbą.');
+  }
+
+  if (!Number.isFinite(AI_RATE_LIMIT_WINDOW_MS) || AI_RATE_LIMIT_WINDOW_MS <= 0) {
+    issues.push('API_RATE_LIMIT_WINDOW_MS musi być dodatnią liczbą.');
+  }
+
+  return issues;
+};
+
+const configurationIssues = validateConfiguration();
+
+const getConfigurationErrorMessage = () =>
+  `Błąd konfiguracji backendu AI: ${configurationIssues.join(' ')}`;
+
+app.use(express.json({ limit: API_PAYLOAD_MAX_SIZE }));
 
 const CATEGORIES = [
   'Jedzenie',
@@ -26,8 +86,18 @@ const CATEGORIES = [
   'Inwestycje',
 ];
 
+const allowedMimeTypes = [
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'text/plain',
+];
+
+const rateLimitStore = new Map();
+
 const getOpenAiHeaders = () => ({
-  Authorization: `Bearer ${OPENAI_API_KEY}`,
+  Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
   'Content-Type': 'application/json',
 });
 
@@ -159,15 +229,178 @@ const callOpenAiChatCompletions = async (payload) => {
   return data;
 };
 
-app.post('/api/ai/advice', async (req, res) => {
-  if (!OPENAI_API_KEY) {
-    return res.status(500).json({ error: 'Brak konfiguracji OPENAI_API_KEY na backendzie.' });
+const validateConfigurationOrFail = (_req, res, next) => {
+  if (configurationIssues.length > 0) {
+    return res.status(500).json({ error: getConfigurationErrorMessage() });
   }
 
-  const { transactions, goals, userQuery } = req.body ?? {};
-  if (!Array.isArray(transactions) || !Array.isArray(goals) || typeof userQuery !== 'string') {
-    return res.status(400).json({ error: 'Nieprawidłowy format danych wejściowych.' });
+  next();
+};
+
+const applyAiCors = (req, res, next) => {
+  const requestOrigin = req.headers.origin;
+
+  if (!requestOrigin) {
+    return next();
   }
+
+  if (!AI_CORS_ALLOWLIST.includes(requestOrigin)) {
+    return res.status(403).json({
+      error: `Origin ${requestOrigin} nie jest dozwolony dla endpointów AI.`,
+    });
+  }
+
+  res.setHeader('Access-Control-Allow-Origin', requestOrigin);
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+
+  next();
+};
+
+const applyAiRateLimit = (req, res, next) => {
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  const now = Date.now();
+  const entry = rateLimitStore.get(ip);
+
+  if (!entry || now >= entry.resetAt) {
+    rateLimitStore.set(ip, { count: 1, resetAt: now + AI_RATE_LIMIT_WINDOW_MS });
+    return next();
+  }
+
+  if (entry.count >= AI_RATE_LIMIT_MAX) {
+    return res.status(429).json({
+      error: 'Przekroczono limit żądań do endpointów AI. Spróbuj ponownie za chwilę.',
+    });
+  }
+
+  entry.count += 1;
+  rateLimitStore.set(ip, entry);
+  return next();
+};
+
+const validatePayloadSize = (req, res, next) => {
+  if (!MAX_PAYLOAD_BYTES) {
+    return next();
+  }
+
+  const contentLength = Number(req.headers['content-length'] || 0);
+  if (contentLength > MAX_PAYLOAD_BYTES) {
+    return res.status(413).json({
+      error: `Payload jest zbyt duży. Maksymalny rozmiar to ${API_PAYLOAD_MAX_SIZE}.`,
+    });
+  }
+
+  next();
+};
+
+const isObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+const validateAdvicePayload = (req, res, next) => {
+  const body = req.body;
+
+  if (!isObject(body)) {
+    return res.status(400).json({ error: 'Body musi być obiektem JSON.' });
+  }
+
+  const { transactions, goals, userQuery } = body;
+
+  if (!Array.isArray(transactions) || transactions.length === 0) {
+    return res.status(400).json({ error: 'Pole "transactions" musi być niepustą tablicą.' });
+  }
+
+  if (!Array.isArray(goals)) {
+    return res.status(400).json({ error: 'Pole "goals" musi być tablicą.' });
+  }
+
+  if (typeof userQuery !== 'string' || !userQuery.trim()) {
+    return res.status(400).json({ error: 'Pole "userQuery" musi być niepustym stringiem.' });
+  }
+
+  for (const [index, transaction] of transactions.entries()) {
+    if (!isObject(transaction)) {
+      return res.status(400).json({ error: `Transakcja #${index + 1} musi być obiektem.` });
+    }
+
+    const { date, amount, type, category, description } = transaction;
+
+    if (typeof date !== 'string' || !date.trim()) {
+      return res.status(400).json({ error: `Transakcja #${index + 1}: pole "date" musi być stringiem.` });
+    }
+
+    if (typeof amount !== 'number' || Number.isNaN(amount)) {
+      return res.status(400).json({ error: `Transakcja #${index + 1}: pole "amount" musi być liczbą.` });
+    }
+
+    if (type !== 'income' && type !== 'expense') {
+      return res.status(400).json({ error: `Transakcja #${index + 1}: pole "type" musi mieć wartość "income" lub "expense".` });
+    }
+
+    if (typeof category !== 'string' || !category.trim()) {
+      return res.status(400).json({ error: `Transakcja #${index + 1}: pole "category" musi być stringiem.` });
+    }
+
+    if (typeof description !== 'string' || !description.trim()) {
+      return res.status(400).json({ error: `Transakcja #${index + 1}: pole "description" musi być stringiem.` });
+    }
+  }
+
+  for (const [index, goal] of goals.entries()) {
+    if (!isObject(goal)) {
+      return res.status(400).json({ error: `Cel #${index + 1} musi być obiektem.` });
+    }
+
+    const { name, targetAmount, currentAmount } = goal;
+
+    if (typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({ error: `Cel #${index + 1}: pole "name" musi być stringiem.` });
+    }
+
+    if (typeof targetAmount !== 'number' || Number.isNaN(targetAmount)) {
+      return res.status(400).json({ error: `Cel #${index + 1}: pole "targetAmount" musi być liczbą.` });
+    }
+
+    if (typeof currentAmount !== 'number' || Number.isNaN(currentAmount)) {
+      return res.status(400).json({ error: `Cel #${index + 1}: pole "currentAmount" musi być liczbą.` });
+    }
+  }
+
+  next();
+};
+
+const validateParseDocumentPayload = (req, res, next) => {
+  const body = req.body;
+
+  if (!isObject(body)) {
+    return res.status(400).json({ error: 'Body musi być obiektem JSON.' });
+  }
+
+  const { fileBase64, mimeType } = body;
+
+  if (typeof fileBase64 !== 'string' || !fileBase64.trim()) {
+    return res.status(400).json({ error: 'Pole "fileBase64" musi być niepustym stringiem.' });
+  }
+
+  if (typeof mimeType !== 'string' || !allowedMimeTypes.includes(mimeType)) {
+    return res.status(400).json({
+      error: `Pole "mimeType" musi należeć do listy: ${allowedMimeTypes.join(', ')}.`,
+    });
+  }
+
+  next();
+};
+
+const aiRouter = express.Router();
+aiRouter.use(applyAiCors, validateConfigurationOrFail, validatePayloadSize, applyAiRateLimit);
+aiRouter.options('/advice', (_req, res) => res.sendStatus(204));
+aiRouter.options('/parse-document', (_req, res) => res.sendStatus(204));
+
+aiRouter.post('/advice', validateAdvicePayload, async (req, res) => {
+  const { transactions, goals, userQuery } = req.body;
 
   try {
     const openAiPayload = mapAdviceRequestToOpenAi({ transactions, goals, userQuery });
@@ -185,15 +418,8 @@ app.post('/api/ai/advice', async (req, res) => {
   }
 });
 
-app.post('/api/ai/parse-document', async (req, res) => {
-  if (!OPENAI_API_KEY) {
-    return res.status(500).json({ error: 'Brak konfiguracji OPENAI_API_KEY na backendzie.' });
-  }
-
-  const { fileBase64, mimeType } = req.body ?? {};
-  if (typeof fileBase64 !== 'string' || typeof mimeType !== 'string') {
-    return res.status(400).json({ error: 'Nieprawidłowy format danych wejściowych.' });
-  }
+aiRouter.post('/parse-document', validateParseDocumentPayload, async (req, res) => {
+  const { fileBase64, mimeType } = req.body;
 
   try {
     const openAiPayload = mapDocumentRequestToOpenAi({ fileBase64, mimeType });
@@ -212,6 +438,12 @@ app.post('/api/ai/parse-document', async (req, res) => {
   }
 });
 
+app.use('/api/ai', aiRouter);
+
 app.listen(PORT, API_BACKEND_HOST, () => {
+  if (configurationIssues.length > 0) {
+    console.error(getConfigurationErrorMessage());
+  }
+
   console.log(`AI Backend listening at http://${API_BACKEND_HOST}:${PORT}`);
 });
