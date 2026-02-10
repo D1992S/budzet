@@ -8,7 +8,20 @@ Backend udostępnia endpointy AI i komunikuje się z API OpenAI.
 ## Wymagania
 
 * Node.js 18+ oraz npm.
-* Klucz API OpenAI (`OPENAI_API_KEY`).
+* Klucz API OpenAI (`OPENAI_API_KEY`) — opcjonalny, potrzebny tylko do funkcji AI.
+
+
+## Szybki start na własnym komputerze (bez publikacji)
+
+Jeśli chcesz po prostu używać aplikacji lokalnie:
+
+```bash
+npm run setup-local
+npm run dev
+```
+
+To utworzy `backend/.env.local` z domyślną konfiguracją i uruchomi frontend + backend.
+Aplikacja działa bez klucza OpenAI, ale zakładki/funkcje AI będą wtedy niedostępne.
 
 ## Struktura projektu
 
@@ -17,7 +30,7 @@ Backend udostępnia endpointy AI i komunikuje się z API OpenAI.
 
 ## Konfiguracja środowiska (OpenAI)
 
-Utwórz plik `backend/.env.local` (jeśli jeszcze nie istnieje) i ustaw:
+Utwórz plik `backend/.env.local` (np. kopiując `backend/.env.local.example`) i ustaw:
 
 ```env
 API_BACKEND_PORT=5000
@@ -27,7 +40,7 @@ API_CORS_ALLOWLIST=http://localhost:5173,http://127.0.0.1:5173
 API_RATE_LIMIT_MAX=30
 API_RATE_LIMIT_WINDOW_MS=60000
 
-OPENAI_API_KEY=sk-...
+# OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-4.1-mini
 AI_MODEL_TEMPERATURE=0.4
 AI_MODEL_MAX_TOKENS=700
@@ -82,8 +95,7 @@ Ręczne wywołanie walidacji:
 npm run check-start --prefix backend
 ```
 
-Jeśli `OPENAI_API_KEY` nie jest ustawiony, backend kończy działanie z czytelną listą błędów i wskazówką,
-co dopisać do `backend/.env.local`.
+Jeśli `OPENAI_API_KEY` nie jest ustawiony, backend uruchomi się normalnie, ale endpointy AI zwrócą błąd konfiguracji do czasu ustawienia klucza.
 
 ## Endpointy backendu AI
 

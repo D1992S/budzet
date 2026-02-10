@@ -1,20 +1,22 @@
-import 'dotenv/config';
+import './loadEnv.js';
 import { collectConfigurationIssues, formatConfigurationErrorMessage } from './configValidation.js';
 
 const { issues } = collectConfigurationIssues();
 
-if (issues.length > 0) {
+const isOptionalAiIssue = (issue) => issue.includes('OPENAI_API_KEY') || issue.startsWith('AI_MODEL_');
+const blockingIssues = issues.filter((issue) => !isOptionalAiIssue(issue));
+
+if (blockingIssues.length > 0) {
   console.error('❌ Nie można uruchomić backendu. Wykryto błędy konfiguracji:');
-  issues.forEach((issue, index) => {
+  blockingIssues.forEach((issue, index) => {
     console.error(`${index + 1}. ${issue}`);
   });
-
-  if (issues.some((issue) => issue.includes('OPENAI_API_KEY'))) {
-    console.error('\nUstaw OPENAI_API_KEY w pliku backend/.env.local, np.: OPENAI_API_KEY=sk-...');
-  }
-
-  console.error(`\n${formatConfigurationErrorMessage(issues)}`);
+  console.error(`\n${formatConfigurationErrorMessage(blockingIssues)}`);
   process.exit(1);
 }
 
-console.log('✅ Konfiguracja backendu jest poprawna.');
+if (issues.some((issue) => issue.includes('OPENAI_API_KEY'))) {
+  console.warn('⚠️ OPENAI_API_KEY nie jest ustawiony — aplikacja uruchomi się, ale funkcje AI będą niedostępne.');
+}
+
+console.log('✅ Konfiguracja backendu pozwala na uruchomienie.');
