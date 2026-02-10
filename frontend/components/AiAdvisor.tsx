@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Transaction, SavingsGoal } from '../types';
-import { getFinancialAdvice } from '../services/geminiService';
+import { getFinancialAdvice } from '../services/chatgptService';
 import { Bot, Send, User, Loader2, Sparkles } from 'lucide-react';
 
 interface AiAdvisorProps {

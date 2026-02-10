@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { Transaction, TransactionType, CATEGORIES } from '../types';
 import { Plus, Trash2, ArrowUpCircle, ArrowDownCircle, Search, Upload, FileText, Loader2, X } from 'lucide-react';
-import { parseFinancialDocument } from '../services/geminiService';
+import { parseFinancialDocument } from '../services/chatgptService';
 
 interface TransactionManagerProps {
   transactions: Transaction[];
